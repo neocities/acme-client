@@ -1,16 +1,14 @@
-require "acme-client"
-
 class Acme::Client
-  DEFAULT_ENDPOINT = 'http://127.0.0.1:4000'
+  DEFAULT_ENDPOINT = 'http://127.0.0.1:4000'.freeze
   DIRECTORY_DEFAULT = {
     'new-authz' => '/acme/new-authz',
     'new-cert' => '/acme/new-cert',
     'new-reg' => '/acme/new-reg',
     'revoke-cert' => '/acme/revoke-cert'
-  }
+  }.freeze
 
-  def initialize(private_key:, endpoint: DEFAULT_ENDPOINT, directory_uri: nil)
-    @endpoint, @private_key, @directory_uri = endpoint, private_key, directory_uri
+  def initialize(private_key:, endpoint: DEFAULT_ENDPOINT, directory_uri: nil, connection_options: {})
+    @endpoint, @private_key, @directory_uri, @connection_options = endpoint, private_key, directory_uri, connection_options
     @nonces ||= []
     load_directory!
   end
@@ -46,24 +44,48 @@ class Acme::Client
     }
 
     response = connection.post(@operation_endpoints.fetch('new-cert'), payload)
-    ::Acme::Client::Certificate.new(OpenSSL::X509::Certificate.new(response.body), fetch_chain(response), csr)
+    ::Acme::Client::Certificate.new(OpenSSL::X509::Certificate.new(response.body), response.headers['location'], fetch_chain(response), csr)
+  end
+
+  def revoke_certificate(certificate)
+    payload = { resource: 'revoke-cert', certificate: Base64.urlsafe_encode64(certificate.to_der) }
+    endpoint = @operation_endpoints.fetch('revoke-cert')
+    response = connection.post(endpoint, payload)
+    response.success?
+  end
+
+  def self.revoke_certificate(certificate, *arguments)
+    client = new(*arguments)
+    client.revoke_certificate(certificate)
   end
 
   def connection
-    @connection ||= Faraday.new(@endpoint) do |configuration|
+    @connection ||= Faraday.new(@endpoint, **@connection_options) do |configuration|
       configuration.use Acme::Client::FaradayMiddleware, client: self
       configuration.adapter Faraday.default_adapter
     end
   end
 
+  def challenge_from_hash(attributes)
+    case attributes.fetch('type')
+    when 'http-01'
+      Acme::Client::Resources::Challenges::HTTP01.new(self, attributes)
+    when 'dns-01'
+      Acme::Client::Resources::Challenges::DNS01.new(self, attributes)
+    when 'tls-sni-01'
+      Acme::Client::Resources::Challenges::TLSSNI01.new(self, attributes)
+    end
+  end
+
   private
 
-  def fetch_chain(response, limit=10)
-    if limit == 0 || response.headers["link"].nil? || response.headers["link"]["up"].nil?
+  def fetch_chain(response, limit = 10)
+    links = response.headers['link']
+    if limit.zero? || links.nil? || links['up'].nil?
       []
     else
-      issuer = connection.get(response.headers["link"]["up"])
-      [OpenSSL::X509::Certificate.new(issuer.body), *fetch_chain(issuer, limit-1)]
+      issuer = connection.get(links['up'])
+      [OpenSSL::X509::Certificate.new(issuer.body), *fetch_chain(issuer, limit - 1)]
     end
   end
 

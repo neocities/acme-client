@@ -1,8 +1,9 @@
 class Acme::Client::Resources::Authorization
   HTTP01 = Acme::Client::Resources::Challenges::HTTP01
   DNS01 = Acme::Client::Resources::Challenges::DNS01
+  TLSSNI01 = Acme::Client::Resources::Challenges::TLSSNI01
 
-  attr_reader :domain, :status, :http01, :dns01
+  attr_reader :domain, :status, :expires, :http01, :dns01, :tls_sni01
 
   def initialize(client, response)
     @client = client
@@ -17,13 +18,14 @@ class Acme::Client::Resources::Authorization
       case attributes.fetch('type')
       when 'http-01' then @http01 = HTTP01.new(@client, attributes)
       when 'dns-01' then @dns01 = DNS01.new(@client, attributes)
-      else
-        # no supported
+      when 'tls-sni-01' then @tls_sni01 = TLSSNI01.new(@client, attributes)
+        # else no-op
       end
     end
   end
 
   def assign_attributes(body)
+    @expires = Time.iso8601(body['expires']) if body.key? 'expires'
     @domain = body['identifier']['value']
     @status = body['status']
   end

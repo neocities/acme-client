@@ -1,4 +1,5 @@
 class Acme::Client::Resources::Challenges::DNS01 < Acme::Client::Resources::Challenges::Base
+  CHALLENGE_TYPE = 'dns-01'.freeze
   RECORD_NAME = '_acme-challenge'.freeze
   RECORD_TYPE = 'TXT'.freeze
 
@@ -11,11 +12,6 @@ class Acme::Client::Resources::Challenges::DNS01 < Acme::Client::Resources::Chal
   end
 
   def record_content
-    crypto.digest.hexdigest(authorization_key)
-  end
-
-  def request_verification
-    response = @client.connection.post(@uri, { resource: 'challenge', type: 'dns-01', keyAuthorization: authorization_key })
-    response.success?
+    Base64.urlsafe_encode64(crypto.digest.digest(authorization_key)).sub(/[\s=]*\z/, '')
   end
 end

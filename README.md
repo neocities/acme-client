@@ -3,39 +3,64 @@
 
 `acme-client` is a client implementation of the [ACME](https://letsencrypt.github.io/acme-spec) protocol in Ruby.
 
-You can find the server reference implementation for ACME server [here](https://github.com/letsencrypt/boulder) and also the a reference [client](https://github.com/letsencrypt/letsencrypt) in python.
+You can find the ACME reference implementations of the [server](https://github.com/letsencrypt/boulder) in Go and the [client](https://github.com/letsencrypt/letsencrypt) in Python.
 
-ACME is part of the [Letsencrypt](https://letsencrypt.org/) project, that are working hard at encrypting all the things.
+ACME is part of the [Letsencrypt](https://letsencrypt.org/) project, which goal is to provide free SSL/TLS certificates with  automation of the acquiring and renewal process.
+
+## Installation
+
+Via Rubygems:
+
+	$ gem install acme-client
+
+Or add it to a Gemfile:
+
+```ruby
+gem 'acme-client'
+```
 
 ## Usage
+
+### Register client
+
+In order to authenticate our client, we have to create an account for it.
 
 ```ruby
 # We're going to need a private key.
 require 'openssl'
-private_key = OpenSSL::PKey::RSA.new(2048)
+private_key = OpenSSL::PKey::RSA.new(4096)
 
 # We need an ACME server to talk to, see github.com/letsencrypt/boulder
+# WARNING: This endpoint is the production endpoint, which is rate limited and will produce valid certificates.
+# You should probably use the staging endpoint for all your experimentation:
+# endpoint = 'https://acme-staging.api.letsencrypt.org/'
 endpoint = 'https://acme-v01.api.letsencrypt.org/'
 
 # Initialize the client
-require 'acme/client'
-client = Acme::Client.new(private_key: private_key, endpoint: endpoint)
+require 'acme-client'
+client = Acme::Client.new(private_key: private_key, endpoint: endpoint, connection_options: { request: { open_timeout: 5, timeout: 5 } })
 
 # If the private key is not known to the server, we need to register it for the first time.
 registration = client.register(contact: 'mailto:contact@example.com')
 
-# You'll may need to agree to the term (that's up the to the server to require it or not but boulder does by default)
+# You may need to agree to the terms of service (that's up the to the server to require it or not but boulder does by default)
 registration.agree_terms
+```
 
-# Let's try to optain a certificate for example.org
+### Authorize for domain
 
-# We need to prove that we control the domain using one of the challenges method.
+Before you are able to obtain certificates for your domain, you have to prove that you are in control of it.
+
+```ruby
 authorization = client.authorize(domain: 'example.org')
 
-# For now the only challenge method supprted by the client is http-01.
+# This example is using the http-01 challenge type. Other challenges are dns-01 or tls-sni-01.
 challenge = authorization.http01
 
-# The http-01 method will require you to response to an HTTP request.
+# The http-01 method will require you to respond to a HTTP request.
+
+# You can retrieve the challenge token
+challenge.token # => "some_token"
 
 # You can retrieve the expected path for the file.
 challenge.filename # => ".well-known/acme-challenge/:some_token"
@@ -43,38 +68,51 @@ challenge.filename # => ".well-known/acme-challenge/:some_token"
 # You can generate the body of the expected response.
 challenge.file_content # => 'string token and JWK thumbprint'
 
-# You can send no Content-Type at all but if you send one it has to be 'text/plain'.
+# You are not required to send a Content-Type. This method will return the right Content-Type should you decide to include one.
 challenge.content_type
 
-# Save the file. We'll create a public directory to serve it from, and we'll creating the challenge directory.
+# Save the file. We'll create a public directory to serve it from, and inside it we'll create the challenge file.
 FileUtils.mkdir_p( File.join( 'public', File.dirname( challenge.filename ) ) )
 
-# Then writing the file
+# We'll write the content of the file
 File.write( File.join( 'public', challenge.filename), challenge.file_content )
 
-# The challenge file can be server with a Ruby webserver such as run a webserver in another console. You may need to forward ports on your router
-#ruby -run -e httpd public -p 8080 --bind-address 0.0.0.0
+# Optionally save the challenge for use at another time (eg: by a background job processor)
+File.write('challenge', challenge.to_h.to_json)
 
+# The challenge file can be served with a Ruby webserver.
+# You can run a webserver in another console for that purpose. You may need to forward ports on your router.
+#
+# $ ruby -run -e httpd public -p 8080 --bind-address 0.0.0.0
+
+# Load a saved challenge. This is only required if you need to reuse a saved challenge as outlined above.
+challenge = client.challenge_from_hash(JSON.parse(File.read('challenge')))
 
 # Once you are ready to serve the confirmation request you can proceed.
 challenge.request_verification # => true
 challenge.verify_status # => 'pending'
 
-# Wait a bit for the server to make the request, or really just blink, it should be fast.
+# Wait a bit for the server to make the request, or just blink. It should be fast.
 sleep(1)
 
 challenge.verify_status # => 'valid'
+```
 
+### Obtain a certificate
+
+Now that your account is authorized for the domain, you should be able to obtain a certificate for it.
+
+```ruby
 # We're going to need a certificate signing request. If not explicitly
 # specified, the first name listed becomes the common name.
 csr = Acme::Client::CertificateRequest.new(names: %w[example.org www.example.org])
 
-# We can now request a certificate, you can pass anything that returns
-# a valid DER encoded CSR when calling to_der on it, for example a
-# OpenSSL::X509::Request too.
+# We can now request a certificate. You can pass anything that returns
+# a valid DER encoded CSR when calling to_der on it. For example an
+# OpenSSL::X509::Request should work too.
 certificate = client.new_certificate(csr) # => #<Acme::Client::Certificate ....>
 
-# Save the certificate and key
+# Save the certificate and the private key to files
 File.write("privkey.pem", certificate.request.private_key.to_pem)
 File.write("cert.pem", certificate.to_pem)
 File.write("chain.pem", certificate.chain_to_pem)
@@ -85,14 +123,18 @@ File.write("fullchain.pem", certificate.fullchain_to_pem)
 #   :Port => 8443,
 #   :DocumentRoot => Dir.pwd,
 #   :SSLEnable => true,
-#   :SSLPrivateKey => OpenSSL::PKey::RSA.new( File.read('key.pem') ),
+#   :SSLPrivateKey => OpenSSL::PKey::RSA.new( File.read('privkey.pem') ),
 #   :SSLCertificate => OpenSSL::X509::Certificate.new( File.read('cert.pem') )); trap('INT') { s.shutdown }; s.start"
 ```
 
 # Not implemented
 
 - Recovery methods are not implemented.
-- tls-sni-01 and proofOfPossession-01 are not implemented.
+- proofOfPossession-01 is not implemented.
+
+# Requirements
+
+Ruby >= 2.1
 
 ## Development
 

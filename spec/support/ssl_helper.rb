@@ -1,4 +1,4 @@
-require "yaml"
+require 'yaml'
 
 module SSLHelper
   class KeyStash
@@ -21,7 +21,7 @@ module SSLHelper
 
     def load
       if File.exist?(KEYSTASH_PATH)
-        YAML.load_file(KEYSTASH_PATH).map {|key| OpenSSL::PKey::RSA.new(key) }
+        YAML.load_file(KEYSTASH_PATH).map { |key| OpenSSL::PKey::RSA.new(key) }
       else
         []
       end
@@ -40,9 +40,14 @@ module SSLHelper
 
   def generate_csr(common_name, private_key)
     request = OpenSSL::X509::Request.new
-    request.subject = OpenSSL::X509::Name.new([
-      ['CN', common_name, OpenSSL::ASN1::UTF8STRING]
-    ])
+    request.subject = OpenSSL::X509::Name.new(
+      [
+        [
+          'CN',
+          common_name,
+          OpenSSL::ASN1::UTF8STRING
+        ]
+      ])
 
     request.public_key = private_key.public_key
     request.sign(private_key, OpenSSL::Digest::SHA256.new)

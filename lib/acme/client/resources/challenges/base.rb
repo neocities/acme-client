@@ -1,5 +1,4 @@
 class Acme::Client::Resources::Challenges::Base
-
   attr_reader :client, :status, :uri, :token, :error
 
   def initialize(client, attributes)
@@ -15,7 +14,20 @@ class Acme::Client::Resources::Challenges::Base
     status
   end
 
+  def request_verification
+    response = @client.connection.post(@uri, resource: 'challenge', type: challenge_type, keyAuthorization: authorization_key)
+    response.success?
+  end
+
+  def to_h
+    { 'token' => token, 'uri' => uri, 'type' => challenge_type }
+  end
+
   private
+
+  def challenge_type
+    self.class::CHALLENGE_TYPE
+  end
 
   def authorization_key
     "#{token}.#{crypto.thumbprint}"
